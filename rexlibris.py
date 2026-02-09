@@ -47,6 +47,38 @@ KNOWN_LIBRARIES: dict[str, LibraryConfig] = {
         scope="MyInst_and_CI",
         institution="44UCL_INST",
     ),
+    "imperial": LibraryConfig(
+        name="Imperial College Library",
+        base_url="https://library-search.imperial.ac.uk",
+        vid="44IMP_INST:ICL_VU1",
+        tab="Everything",
+        scope="MyInst_and_CI",
+        institution="44IMP_INST",
+    ),
+    "cambridge": LibraryConfig(
+        name="Cambridge University Library",
+        base_url="https://idiscover.lib.cam.ac.uk",
+        vid="44CAM_INST:44CAM_PROD",
+        tab="LibraryCatalog",
+        scope="All_LIBS",
+        institution="44CAM_INST",
+    ),
+    "kings": LibraryConfig(
+        name="King's College London Library",
+        base_url="https://librarysearch.kcl.ac.uk",
+        vid="44KCL_INST:44KCL_INST",
+        tab="Everything",
+        scope="MyInst_and_CI",
+        institution="44KCL_INST",
+    ),
+    "lse": LibraryConfig(
+        name="Senate House Library (London)",
+        base_url="https://search.libraries.london.ac.uk",
+        vid="44SHL_INST:SHL",
+        tab="LibraryCatalog",
+        scope="SHL_SEARCH",
+        institution="44SHL_INST",
+    ),
 }
 
 
@@ -1239,9 +1271,84 @@ class WebHandler(BaseHTTPRequestHandler):
         # Quieter logging
         pass
     
-    def _send_html(self, content: str, status: int = 200):
+    # ── Cookie helpers ──────────────────────────────────────────────
+
+    def _parse_cookies(self) -> dict[str, str]:
+        """Parse cookies from the request header."""
+        cookie_header = self.headers.get('Cookie', '')
+        cookies = {}
+        for item in cookie_header.split(';'):
+            item = item.strip()
+            if '=' in item:
+                k, v = item.split('=', 1)
+                cookies[k.strip()] = v.strip()
+        return cookies
+
+    def _get_user_libraries(self) -> dict[str, dict]:
+        """Read user-added libraries from cookie."""
+        cookies = self._parse_cookies()
+        raw = cookies.get('rexlibris_libs', '')
+        if raw:
+            try:
+                decoded = urllib.parse.unquote(raw)
+                return json.loads(decoded)
+            except Exception:
+                pass
+        return {}
+
+    def _get_active_cookie(self) -> str | None:
+        """Read the active library key from cookie."""
+        cookies = self._parse_cookies()
+        val = cookies.get('rexlibris_active', '')
+        return urllib.parse.unquote(val) if val else None
+
+    def _make_libs_cookie(self, libs: dict) -> str:
+        """Build Set-Cookie header value for user libraries."""
+        encoded = urllib.parse.quote(json.dumps(libs, separators=(',', ':')))
+        return f'rexlibris_libs={encoded}; Path=/; Max-Age=31536000; SameSite=Lax'
+
+    def _make_active_cookie(self, key: str) -> str:
+        """Build Set-Cookie header value for active library."""
+        return f'rexlibris_active={urllib.parse.quote(key)}; Path=/; Max-Age=31536000; SameSite=Lax'
+
+    def _clear_active_cookie(self) -> str:
+        """Build Set-Cookie header value to clear active library."""
+        return 'rexlibris_active=; Path=/; Max-Age=0; SameSite=Lax'
+
+    # ── Library resolution (cookies + defaults) ─────────────────────
+
+    def _get_web_library(self, key: str) -> LibraryConfig | None:
+        """Resolve a library by key from defaults or user cookies."""
+        if not key:
+            return None
+        if key in KNOWN_LIBRARIES:
+            return KNOWN_LIBRARIES[key]
+        user_libs = self._get_user_libraries()
+        if key in user_libs:
+            return LibraryConfig(**user_libs[key])
+        return None
+
+    def _all_web_libraries(self) -> tuple[dict[str, LibraryConfig], set[str]]:
+        """
+        Return all available libraries and the set of user-added keys.
+        Returns (all_libs_dict, user_keys_set).
+        """
+        libs: dict[str, LibraryConfig] = dict(KNOWN_LIBRARIES)
+        user_libs = self._get_user_libraries()
+        user_keys: set[str] = set()
+        for key, data in user_libs.items():
+            if key not in KNOWN_LIBRARIES:
+                libs[key] = LibraryConfig(**data)
+                user_keys.add(key)
+        return libs, user_keys
+
+    # ── Response helpers ────────────────────────────────────────────
+
+    def _send_html(self, content: str, status: int = 200, cookies: list[str] | None = None):
         self.send_response(status)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
+        for c in (cookies or []):
+            self.send_header('Set-Cookie', c)
         self.end_headers()
         self.wfile.write(content.encode('utf-8'))
     
@@ -1277,12 +1384,17 @@ class WebHandler(BaseHTTPRequestHandler):
         )
     
     def _render_library_select(self) -> str:
+        # Get all libraries, but distinguishing between built-in and user-saved
         all_libs = self.app_config.all_libraries()
+        user_libs = self.app_config.libraries
+
         items = []
         for key, lib in all_libs.items():
-            is_saved = key in self.app_config.libraries
+            is_saved = key in user_libs
             source = "(saved)" if is_saved else ""
             delete_btn = ""
+            
+            # ONLY user-added libraries get the delete button
             if is_saved:
                 delete_btn = (
                     f'<form method="POST" action="/remove-library" style="display:inline">'
@@ -1290,6 +1402,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     f'<button type="submit" class="lib-delete" title="Remove this library">&times;</button>'
                     f'</form>'
                 )
+                
             items.append(
                 f'<li>'
                 f'<a href="/?lib={html.escape(key)}">'
@@ -1561,6 +1674,7 @@ class WebHandler(BaseHTTPRequestHandler):
         elif path == '/remove-library':
             fields = self._parse_post_body()
             key = fields.get("key", "").strip()
+            # Security check: ensure key is not a built-in
             if key and key not in KNOWN_LIBRARIES:
                 self.app_config.remove_library(key)
                 # Remove cached pool if present
