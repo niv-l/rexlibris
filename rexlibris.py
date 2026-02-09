@@ -1444,7 +1444,7 @@ class WebHandler(BaseHTTPRequestHandler):
         )
         return self._render_page("Add Library", content)
 
-    def _render_main(self, lib_key: str, results: list[dict] = None, material_type: str = None, n: int = 5) -> str:
+    def _render_main(self, lib_key: str, results: list[dict] = None, material_type: str = None, n: int = 1) -> str:
         config = self.app_config.get_library(lib_key)
         if not config:
             return self._render_library_select()
