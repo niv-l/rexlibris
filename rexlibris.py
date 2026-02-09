@@ -168,12 +168,24 @@ _HEADERS = {
 # ── Random word supply ──────────────────────────────────────────────
 
 class WordSupply:
+    """Supplies random words from API, with fallback to prevent crashes."""
+    
     _API = "https://random-word-api.herokuapp.com/word?number={n}"
-    _BATCH = 50  # Reduced batch size to be gentler on the API
+    _BATCH = 50
     _LOW = 20
+    
+    # Fallback words in case API fails or list is empty
+    _FALLBACK = [
+        "history", "science", "world", "nature", "human", "society", "culture",
+        "language", "music", "philosophy", "politics", "economics", "psychology",
+        "biology", "physics", "chemistry", "mathematics", "literature", "poetry",
+        "fiction", "theory", "modern", "ancient", "art", "design", "education",
+        "technology", "environment", "health", "medicine", "travel", "adventure",
+    ]
 
     def __init__(self):
         self._words: list[str] = []
+        self._used: set[str] = set()
         self._lock = threading.Lock()
         self._filling = False
 
@@ -183,7 +195,6 @@ class WordSupply:
         try:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 words = json.loads(resp.read().decode())
-            # Filter to reasonable words (the new API returns lowercase by default)
             return [w.lower() for w in words if w.isalpha() and 3 <= len(w) <= 12]
         except Exception:
             return []
@@ -193,7 +204,10 @@ class WordSupply:
             new = self._fetch(self._BATCH)
             if new:
                 with self._lock:
-                    self._words.extend(new)
+                    # Only add words we haven't used yet
+                    for w in new:
+                        if w not in self._used:
+                            self._words.append(w)
         finally:
             self._filling = False
 
@@ -203,6 +217,7 @@ class WordSupply:
             threading.Thread(target=self._fill_bg, daemon=True).start()
 
     def prime(self):
+        """Initial fetch - blocking to ensure words are ready."""
         words = self._fetch(self._BATCH)
         with self._lock:
             self._words.extend(words)
@@ -211,17 +226,29 @@ class WordSupply:
     def get(self) -> str:
         with self._lock:
             if self._words:
+                # Pick random word from available
                 idx = random.randrange(len(self._words))
                 self._words[idx], self._words[-1] = self._words[-1], self._words[idx]
                 word = self._words.pop()
+                self._used.add(word)
             else:
-                word = ""
+                # Fallback: pick from fallback list, avoiding recently used
+                available = [w for w in self._FALLBACK if w not in self._used]
+                if not available:
+                    # Reset used set if we've exhausted everything
+                    self._used.clear()
+                    available = self._FALLBACK
+                word = random.choice(available)
+                self._used.add(word)
+        
         self._maybe_refill()
-        return word or "".join(random.choices(string.ascii_lowercase, k=random.randint(2, 3)))
+        return word
 
     def size(self) -> int:
         with self._lock:
             return len(self._words)
+
+_word_supply = WordSupply()
 
 _word_supply = WordSupply()
 
