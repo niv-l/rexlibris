@@ -17,6 +17,9 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import html
+import time
 
 # ── Configuration ───────────────────────────────────────────────────
 
@@ -259,7 +262,6 @@ def test_config(config: LibraryConfig, verbose: bool = False) -> tuple[bool, str
     Test a library configuration with reliable queries.
     Returns (success, message).
     """
-    # Test with common words that should exist in any library
     test_queries = ["the", "book", "science", "history", "a"]
     
     for query in test_queries:
@@ -279,7 +281,6 @@ def test_config(config: LibraryConfig, verbose: bool = False) -> tuple[bool, str
         if docs:
             return True, f"Success! Found {len(docs)} results for '{query}'"
     
-    # All queries failed - try to diagnose
     url = _build_search_url(config, "the", "any", None, 0, 5)
     _, error = _do_search(url)
     
@@ -318,7 +319,6 @@ def detect_from_url(search_url: str) -> tuple[LibraryConfig | None, str | None]:
         
         institution = vid.split(":")[0] if ":" in vid else vid
         
-        # Generate a readable name from the domain
         domain_parts = parsed.netloc.replace(".primo.exlibrisgroup.com", "").split(".")
         name = domain_parts[0].upper() + " Library"
         
@@ -426,6 +426,43 @@ def format_record(doc: dict, *, verbose: bool = False) -> list[str]:
     return lines
 
 
+def extract_record_data(doc: dict, config: LibraryConfig) -> dict:
+    """Extract record data for web display."""
+    disp = doc.get("pnx", {}).get("display", {})
+    
+    title = (disp.get("title", ["Unknown"])[0])[:200]
+    creators = disp.get("creator", disp.get("contributor", [])) or []
+    creator = creators[0] if creators else "Unknown"
+    rtype = disp.get("type", ["unknown"])[0]
+    date = disp.get("creationdate", ["n.d."])[0]
+    publisher = disp.get("publisher", [None])[0]
+    language = disp.get("language", [None])[0]
+    subjects = disp.get("subject", [])[:8]
+    description = disp.get("description", [None])[0]
+    identifier = disp.get("identifier", [])
+    
+    isbn = None
+    for ident in identifier:
+        if ident and ('isbn' in ident.lower() or re.match(r'^\d{10,13}$', ident.replace('-', ''))):
+            isbn = ident
+            break
+    
+    return {
+        "title": title,
+        "creator": creator,
+        "creators": creators[:5],
+        "type": rtype,
+        "date": date,
+        "publisher": publisher,
+        "language": language,
+        "subjects": subjects,
+        "description": description[:500] if description else None,
+        "isbn": isbn,
+        "url": record_url(doc, config),
+        "record_id": _record_id(doc),
+    }
+
+
 # ── Result pool (background pre-fetch) ─────────────────────────────
 
 class ResultPool:
@@ -522,6 +559,692 @@ class ResultPool:
             self._fill()
         if self.size() < self._low:
             self.fill_async()
+
+
+# ── Web UI ──────────────────────────────────────────────────────────
+
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&family=Titillium+Web:wght@400;600&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
+
+:root {
+    --serif: 'Crimson Pro', 'Crimson Text', Georgia, 'Times New Roman', serif;
+    --sans: 'Titillium Web', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --mono: 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
+    --bg: #faf9f7;
+    --bg-alt: #f3f1ed;
+    --text: #2c2c2c;
+    --text-light: #666;
+    --text-lighter: #888;
+    --accent: #8b4513;
+    --border: #ddd;
+    --border-light: #e8e6e2;
+}
+
+html { font-size: 18px; }
+
+body {
+    font-family: var(--serif);
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+}
+
+header {
+    text-align: center;
+    padding: 2rem 0 1.5rem;
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: 2rem;
+}
+
+h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 2rem;
+    letter-spacing: 0.02em;
+    margin: 0 0 0.25rem;
+    color: var(--text);
+}
+
+.subtitle {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-lighter);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+}
+
+.library-name {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    color: var(--text-light);
+    margin-top: 0.75rem;
+}
+
+.library-name a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+}
+
+.library-name a:hover {
+    border-bottom-color: var(--accent);
+}
+
+/* Controls */
+.controls {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+    padding: 1.25rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border-light);
+}
+
+.btn {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.6rem 1.5rem;
+    border: 1px solid var(--text);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn:hover {
+    background: var(--text);
+    color: var(--bg);
+}
+
+.btn:active {
+    transform: translateY(1px);
+}
+
+.btn-primary {
+    background: var(--text);
+    color: var(--bg);
+}
+
+.btn-primary:hover {
+    background: #444;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+select {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+}
+
+select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Results */
+.result {
+    padding: 1.5rem 0;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.result:first-child {
+    padding-top: 0;
+}
+
+.result-title {
+    font-family: var(--serif);
+    font-size: 1.35rem;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0 0 0.5rem;
+    color: var(--text);
+}
+
+.result-title a {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+}
+
+.result-title a:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.result-creator {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--text);
+    margin-bottom: 0.35rem;
+}
+
+.result-meta {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-lighter);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.result-meta span {
+    margin-right: 1rem;
+}
+
+.result-meta span:last-child {
+    margin-right: 0;
+}
+
+.result-description {
+    font-family: var(--serif);
+    font-size: 0.95rem;
+    color: var(--text-light);
+    margin-top: 0.75rem;
+    line-height: 1.55;
+}
+
+.result-subjects {
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    color: var(--text-lighter);
+    margin-top: 0.6rem;
+}
+
+.result-subjects span {
+    display: inline-block;
+    background: var(--bg-alt);
+    padding: 0.15rem 0.5rem;
+    margin: 0.15rem 0.25rem 0.15rem 0;
+    border: 1px solid var(--border-light);
+}
+
+.result-link {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    margin-top: 0.75rem;
+}
+
+.result-link a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.result-link a:hover {
+    text-decoration: underline;
+}
+
+/* Status */
+.status {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-lighter);
+    text-align: center;
+    padding: 1rem;
+}
+
+.status-bar {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    padding: 0.75rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border-light);
+    margin-top: 2rem;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--text-lighter);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* Loading */
+.loading {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-light);
+}
+
+.loading::after {
+    content: '';
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-left: 0.75rem;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Empty state */
+.empty {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-lighter);
+    font-style: italic;
+}
+
+/* Library selection */
+.library-select {
+    text-align: center;
+    padding: 3rem 1rem;
+}
+
+.library-select h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 1.4rem;
+    margin-bottom: 1.5rem;
+}
+
+.library-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 auto;
+    max-width: 400px;
+}
+
+.library-list li {
+    margin: 0.5rem 0;
+}
+
+.library-list a {
+    display: block;
+    padding: 0.75rem 1rem;
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    color: var(--text);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    transition: all 0.15s ease;
+}
+
+.library-list a:hover {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+}
+
+.library-list .lib-key {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-lighter);
+    margin-left: 0.5rem;
+}
+
+.library-list a:hover .lib-key {
+    color: var(--bg-alt);
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    padding: 2rem;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--text-lighter);
+    letter-spacing: 0.05em;
+}
+
+footer a {
+    color: var(--text-light);
+    text-decoration: none;
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    html { font-size: 16px; }
+    .container { padding: 1rem; }
+    .controls { flex-direction: column; gap: 0.75rem; }
+    .status-bar { flex-direction: column; gap: 0.5rem; }
+}
+"""
+
+HTML_BASE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} — Rexlibris</title>
+    <style>{css}</style>
+</head>
+<body>
+    <div class="container">
+        {content}
+    </div>
+    <footer>
+        <a href="/">Rexlibris</a> · Random discovery for Primo VE libraries
+    </footer>
+    {scripts}
+</body>
+</html>
+"""
+
+HTML_HEADER = """
+<header>
+    <h1>Rexlibris</h1>
+    <div class="subtitle">Random Discovery</div>
+    {library_info}
+</header>
+"""
+
+HTML_LIBRARY_SELECT = """
+<div class="library-select">
+    <h2>Select a Library</h2>
+    <ul class="library-list">
+        {items}
+    </ul>
+</div>
+"""
+
+HTML_MAIN = """
+{header}
+<form class="controls" method="GET" action="/random">
+    <input type="hidden" name="lib" value="{lib_key}">
+    <select name="type" title="Material type">
+        <option value="">All types</option>
+        {type_options}
+    </select>
+    <select name="n" title="Number of results">
+        <option value="1" {n1_selected}>1 result</option>
+        <option value="3" {n3_selected}>3 results</option>
+        <option value="5" {n5_selected}>5 results</option>
+        <option value="10" {n10_selected}>10 results</option>
+    </select>
+    <button type="submit" class="btn btn-primary">Discover</button>
+</form>
+<div id="results">
+    {results}
+</div>
+<div class="status-bar">
+    <span>Cache: {pool_size} items</span>
+    <span>Words: {word_size}</span>
+</div>
+"""
+
+HTML_RESULT = """
+<div class="result">
+    <h2 class="result-title"><a href="{url}" target="_blank" rel="noopener">{title}</a></h2>
+    <div class="result-creator">{creator}</div>
+    <div class="result-meta">
+        <span>{date}</span>
+        <span>{type}</span>
+        {publisher_html}
+        {language_html}
+    </div>
+    {description_html}
+    {subjects_html}
+    <div class="result-link"><a href="{url}" target="_blank" rel="noopener">View in catalogue →</a></div>
+</div>
+"""
+
+
+class WebHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for the web UI."""
+    
+    app_config: AppConfig = None
+    pools: dict[str, ResultPool] = {}
+    pools_lock = threading.Lock()
+    
+    def log_message(self, format, *args):
+        # Quieter logging
+        pass
+    
+    def _send_html(self, content: str, status: int = 200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(content.encode('utf-8'))
+    
+    def _send_json(self, data: dict, status: int = 200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+    
+    def _get_pool(self, lib_key: str) -> ResultPool | None:
+        config = self.app_config.get_library(lib_key)
+        if not config:
+            return None
+        
+        with self.pools_lock:
+            if lib_key not in self.pools:
+                pool = ResultPool(config)
+                pool.fill_async()
+                self.pools[lib_key] = pool
+            return self.pools[lib_key]
+    
+    def _render_page(self, title: str, content: str, scripts: str = "") -> str:
+        return HTML_BASE.format(
+            title=html.escape(title),
+            css=CSS,
+            content=content,
+            scripts=scripts
+        )
+    
+    def _render_library_select(self) -> str:
+        all_libs = self.app_config.all_libraries()
+        items = []
+        for key, lib in all_libs.items():
+            source = "(saved)" if key in self.app_config.libraries else ""
+            items.append(
+                f'<li><a href="/?lib={html.escape(key)}">'
+                f'{html.escape(lib.name)}'
+                f'<span class="lib-key">{html.escape(key)} {source}</span>'
+                f'</a></li>'
+            )
+        
+        content = HTML_HEADER.format(library_info="") + HTML_LIBRARY_SELECT.format(items="\n".join(items))
+        return self._render_page("Select Library", content)
+    
+    def _render_main(self, lib_key: str, results: list[dict] = None, material_type: str = None, n: int = 5) -> str:
+        config = self.app_config.get_library(lib_key)
+        if not config:
+            return self._render_library_select()
+        
+        pool = self._get_pool(lib_key)
+        
+        # Header with library info
+        library_info = f'<div class="library-name">{html.escape(config.name)} · <a href="/">change</a></div>'
+        header = HTML_HEADER.format(library_info=library_info)
+        
+        # Type options
+        type_options = []
+        for t in TYPES.keys():
+            selected = 'selected' if t == material_type else ''
+            type_options.append(f'<option value="{t}" {selected}>{t.title()}</option>')
+        
+        # Results HTML
+        results_html = ""
+        if results:
+            for r in results:
+                publisher_html = f'<span>{html.escape(r["publisher"])}</span>' if r.get("publisher") else ""
+                language_html = f'<span>{html.escape(r["language"])}</span>' if r.get("language") else ""
+                
+                description_html = ""
+                if r.get("description"):
+                    desc = r["description"]
+                    if len(desc) > 300:
+                        desc = desc[:300] + "…"
+                    description_html = f'<p class="result-description">{html.escape(desc)}</p>'
+                
+                subjects_html = ""
+                if r.get("subjects"):
+                    subj_spans = "".join(f'<span>{html.escape(s)}</span>' for s in r["subjects"][:6])
+                    subjects_html = f'<div class="result-subjects">{subj_spans}</div>'
+                
+                results_html += HTML_RESULT.format(
+                    title=html.escape(r.get("title", "Unknown")),
+                    creator=html.escape(r.get("creator", "Unknown")),
+                    date=html.escape(str(r.get("date", "n.d."))),
+                    type=html.escape(r.get("type", "unknown")),
+                    publisher_html=publisher_html,
+                    language_html=language_html,
+                    description_html=description_html,
+                    subjects_html=subjects_html,
+                    url=html.escape(r.get("url", "#")),
+                )
+        elif results is not None:
+            results_html = '<div class="empty">No results found. Try again or change the filter.</div>'
+        else:
+            results_html = '<div class="empty">Click "Discover" to find something random.</div>'
+        
+        content = HTML_MAIN.format(
+            header=header,
+            lib_key=html.escape(lib_key),
+            type_options="\n".join(type_options),
+            n1_selected='selected' if n == 1 else '',
+            n3_selected='selected' if n == 3 else '',
+            n5_selected='selected' if n == 5 else '',
+            n10_selected='selected' if n == 10 else '',
+            results=results_html,
+            pool_size=pool.size() if pool else 0,
+            word_size=_word_supply.size(),
+        )
+        
+        return self._render_page(config.name, content)
+    
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query)
+        
+        lib_key = params.get('lib', [self.app_config.active])[0]
+        
+        if path == '/':
+            if lib_key and self.app_config.get_library(lib_key):
+                self._send_html(self._render_main(lib_key))
+            else:
+                self._send_html(self._render_library_select())
+        
+        elif path == '/random':
+            if not lib_key:
+                self._send_html(self._render_library_select())
+                return
+            
+            config = self.app_config.get_library(lib_key)
+            if not config:
+                self._send_html(self._render_library_select())
+                return
+            
+            material_type = params.get('type', [None])[0]
+            if material_type and material_type not in TYPES:
+                material_type = None
+            
+            n = min(max(int(params.get('n', [5])[0]), 1), 20)
+            
+            pool = self._get_pool(lib_key)
+            if material_type != pool.material_type:
+                pool.material_type = material_type
+                pool.fill_async()
+                time.sleep(0.3)  # Brief wait for initial fetch
+            
+            pool.ensure_available(n)
+            docs = pool.take(n)
+            pool.fill_async()
+            
+            results = [extract_record_data(doc, config) for doc in docs]
+            
+            self._send_html(self._render_main(lib_key, results, material_type, n))
+        
+        elif path == '/api/random':
+            if not lib_key:
+                self._send_json({"error": "No library specified"}, 400)
+                return
+            
+            config = self.app_config.get_library(lib_key)
+            if not config:
+                self._send_json({"error": "Library not found"}, 404)
+                return
+            
+            material_type = params.get('type', [None])[0]
+            n = min(max(int(params.get('n', [1])[0]), 1), 20)
+            
+            pool = self._get_pool(lib_key)
+            if material_type != pool.material_type:
+                pool.material_type = material_type
+            
+            pool.ensure_available(n)
+            docs = pool.take(n)
+            pool.fill_async()
+            
+            results = [extract_record_data(doc, config) for doc in docs]
+            self._send_json({"results": results, "count": len(results)})
+        
+        elif path == '/api/status':
+            pool = self._get_pool(lib_key) if lib_key else None
+            self._send_json({
+                "library": lib_key,
+                "pool_size": pool.size() if pool else 0,
+                "word_supply": _word_supply.size(),
+            })
+        
+        else:
+            self.send_error(404, "Not Found")
+
+
+def run_web_server(app_config: AppConfig, port: int = 8080):
+    """Start the web server."""
+    WebHandler.app_config = app_config
+    
+    # Prime the word supply
+    print(f"  ⏳ Loading word supply...")
+    _word_supply.prime()
+    print(f"  ✓ {_word_supply.size()} random words ready")
+    
+    # Pre-warm pool for active library if set
+    if app_config.active:
+        config = app_config.get_library()
+        if config:
+            print(f"  ⏳ Pre-fetching from {config.name}...")
+            pool = ResultPool(config)
+            pool.fill_async()
+            WebHandler.pools[app_config.active] = pool
+    
+    server = HTTPServer(('', port), WebHandler)
+    print(f"\n  ✓ Server running at http://localhost:{port}")
+    print(f"  Press Ctrl+C to stop\n")
+    
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  Shutting down...")
+        server.shutdown()
 
 
 # ── Interactive setup ───────────────────────────────────────────────
@@ -720,6 +1443,8 @@ def main():
         epilog="""
 Examples:
   %(prog)s                     Interactive mode (setup on first run)
+  %(prog)s --web               Start web interface
+  %(prog)s --web -p 3000       Web interface on port 3000
   %(prog)s -l ucl              Use UCL library
   %(prog)s --list              Show available libraries
   %(prog)s --add               Add a new library
@@ -756,6 +1481,17 @@ Examples:
         "-v", "--verbose",
         action="store_true",
         help="Verbose output (for --test)"
+    )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Start web interface"
+    )
+    parser.add_argument(
+        "-p", "--port",
+        type=int,
+        default=8080,
+        help="Port for web interface (default: 8080)"
     )
     args = parser.parse_args()
 
@@ -812,6 +1548,16 @@ Examples:
         print()
         success, message = test_config(config, verbose=args.verbose)
         print(f"  {'✓' if success else '✗'} {message}")
+        return
+
+    # Handle --web
+    if args.web:
+        if args.library:
+            app_config.set_active(args.library)
+        print("\n" + "=" * 60)
+        print("  📚  Rexlibris — Web Interface")
+        print("=" * 60)
+        run_web_server(app_config, args.port)
         return
 
     # Get library config
