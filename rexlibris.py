@@ -63,7 +63,7 @@ KNOWN_LIBRARIES: dict[str, LibraryConfig] = {
         scope="All_LIBS",
         institution="44CAM_INST",
     ),
-    "kings": LibraryConfig(
+    "kcl": LibraryConfig(
         name="King's College London Library",
         base_url="https://librarysearch.kcl.ac.uk",
         vid="44KCL_INST:44KCL_INST",
@@ -71,7 +71,7 @@ KNOWN_LIBRARIES: dict[str, LibraryConfig] = {
         scope="MyInst_and_CI",
         institution="44KCL_INST",
     ),
-    "lse": LibraryConfig(
+    "shl": LibraryConfig(
         name="Senate House Library (London)",
         base_url="https://search.libraries.london.ac.uk",
         vid="44SHL_INST:SHL",
