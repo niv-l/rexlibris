@@ -667,8 +667,9 @@ header {
 
 h1 {
     font-family: var(--serif);
-    font-weight: 400;
+    font-weight: 200;
     font-size: 2rem;
+    font-style: italic;
     letter-spacing: 0.02em;
     margin: 0 0 0.25rem;
     color: var(--text);
