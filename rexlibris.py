@@ -1521,7 +1521,7 @@ class WebHandler(BaseHTTPRequestHandler):
         elif results is not None:
             results_html = '<div class="empty">No results found. Try again or change the filter.</div>'
         else:
-            results_html = '<div class="empty">Click "Discover" to find something random.</div>'
+            results_html = '<div class="empty">Click "Discover" to find something random. Please allow a few seconds for indexing. </div>'
         
         content = HTML_MAIN.format(
             header=header,
