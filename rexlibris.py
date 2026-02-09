@@ -168,8 +168,8 @@ _HEADERS = {
 # ── Random word supply ──────────────────────────────────────────────
 
 class WordSupply:
-    _API = "https://random-word-api.vercel.app/api?words={n}&type=uppercase"
-    _BATCH = 80
+    _API = "https://random-word-api.herokuapp.com/word?number={n}"
+    _BATCH = 50  # Reduced batch size to be gentler on the API
     _LOW = 20
 
     def __init__(self):
@@ -183,6 +183,7 @@ class WordSupply:
         try:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 words = json.loads(resp.read().decode())
+            # Filter to reasonable words (the new API returns lowercase by default)
             return [w.lower() for w in words if w.isalpha() and 3 <= len(w) <= 12]
         except Exception:
             return []
@@ -222,7 +223,6 @@ class WordSupply:
         with self._lock:
             return len(self._words)
 
-
 _word_supply = WordSupply()
 
 
@@ -257,7 +257,6 @@ def _build_search_url(
         params["qInclude"] = f"facet_rtype,exact,{TYPES[material_type]}"
 
     return f"{config.base_url}/primaws/rest/pub/pnxs?{urllib.parse.urlencode(params)}"
-
 
 def _do_search(url: str, timeout: int = 10) -> tuple[list[dict], str | None]:
     """Execute search and return (docs, error_message)."""
@@ -881,7 +880,7 @@ select:focus {
 /* Empty state */
 .empty {
     text-align: center;
-    padding: 3rem;
+    # padding: 3rem;
     color: var(--text-lighter);
     font-style: italic;
 }
@@ -889,7 +888,7 @@ select:focus {
 /* Library selection */
 .library-select {
     text-align: center;
-    padding: 3rem 1rem;
+    padding: 1rem 1rem;
 }
 
 .library-select h2 {
@@ -1136,7 +1135,7 @@ HTML_BASE = """<!DOCTYPE html>
         {content}
     </div>
     <footer>
-        <a href="/">Rexlibris</a> · Random discovery for Primo VE libraries
+        <a href="/">Rexlibris</a> · Made with love by niv.
     </footer>
     {scripts}
 </body>
@@ -1146,7 +1145,7 @@ HTML_BASE = """<!DOCTYPE html>
 HTML_HEADER = """
 <header>
     <h1>Rexlibris</h1>
-    <div class="subtitle">Random Discovery</div>
+    <div class="subtitle">Random discovery for Primo libraries</div>
     {library_info}
 </header>
 """
@@ -1367,10 +1366,11 @@ class WebHandler(BaseHTTPRequestHandler):
         config = self.app_config.get_library(lib_key)
         if not config:
             return None
-        
+
         with self.pools_lock:
             if lib_key not in self.pools:
                 pool = ResultPool(config)
+                pool.material_type = "book"
                 pool.fill_async()
                 self.pools[lib_key] = pool
             return self.pools[lib_key]
@@ -1519,10 +1519,10 @@ class WebHandler(BaseHTTPRequestHandler):
         lib_key = params.get('lib', [self.app_config.active])[0]
         
         if path == '/':
-            if 'select' not in params and lib_key and self.app_config.get_library(lib_key):
-                self._send_html(self._render_main(lib_key))
-            else:
-                self._send_html(self._render_library_select())
+                    if 'select' not in params and lib_key and self.app_config.get_library(lib_key):
+                        self._send_html(self._render_main(lib_key))
+                    else:
+                        self._send_html(self._render_library_select())
 
         elif path == '/add-library':
             self._send_html(self._render_add_library())
@@ -1701,6 +1701,7 @@ def run_web_server(app_config: AppConfig, port: int = 8080):
         if config:
             print(f"  ⏳ Pre-fetching from {config.name}...")
             pool = ResultPool(config)
+            pool.material_type = "book"
             pool.fill_async()
             WebHandler.pools[app_config.active] = pool
     
