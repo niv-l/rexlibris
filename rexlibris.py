@@ -876,6 +876,7 @@ select:focus {
 
 .library-list li {
     margin: 0.5rem 0;
+    position: relative;
 }
 
 .library-list a {
@@ -924,6 +925,161 @@ footer a {
 
 footer a:hover {
     text-decoration: underline;
+}
+
+/* Add library form */
+.add-library {
+    max-width: 500px;
+    margin: 0 auto;
+    padding: 2rem 0;
+}
+
+.add-library h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 1.4rem;
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.add-library .section-label {
+    font-family: var(--sans);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-light);
+    margin: 1.5rem 0 0.75rem;
+}
+
+.add-library .section-label:first-of-type {
+    margin-top: 0;
+}
+
+.add-library .hint {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-lighter);
+    margin-bottom: 0.75rem;
+}
+
+.add-library .divider {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-lighter);
+    margin: 1.5rem 0;
+    position: relative;
+}
+
+.add-library .divider::before,
+.add-library .divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background: var(--border-light);
+}
+
+.add-library .divider::before { left: 0; }
+.add-library .divider::after { right: 0; }
+
+.form-group {
+    margin-bottom: 0.75rem;
+}
+
+.form-group label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+}
+
+.form-group input[type="text"],
+.form-group input[type="url"] {
+    width: 100%;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+}
+
+.form-group input:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.manual-toggle {
+    text-align: center;
+    margin: 1rem 0;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+}
+
+.manual-toggle a {
+    color: var(--text-lighter);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--text-lighter);
+}
+
+.manual-toggle a:hover {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.form-actions {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.message {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid;
+}
+
+.message-error {
+    color: #8b0000;
+    background: #fff5f5;
+    border-color: #e8c0c0;
+}
+
+.message-success {
+    color: #2d5f2d;
+    background: #f5fff5;
+    border-color: #c0e8c0;
+}
+
+/* Library list delete */
+.library-list .lib-delete {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-lighter);
+    background: var(--bg);
+    border: 1px solid var(--border-light);
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+    z-index: 1;
+}
+
+.library-list .lib-delete:hover {
+    color: #8b0000;
+    border-color: #8b0000;
+    background: #fff5f5;
 }
 
 /* Responsive */
@@ -1013,6 +1169,64 @@ HTML_RESULT = """
 </div>
 """
 
+HTML_ADD_LIBRARY = """
+{header}
+<div class="add-library">
+    <h2>Add a Library</h2>
+    {message}
+    <form method="POST" action="/add-library">
+        <div class="hint">
+            Paste a search URL from your library's Primo page, or an API URL
+            from the browser Network tab (look for a request to 'pnxs').
+        </div>
+        <div class="form-group">
+            <label for="url">Primo URL</label>
+            <input type="url" id="url" name="url" value="{url_value}" placeholder="https://library.primo.exlibrisgroup.com/discovery/search?...">
+        </div>
+        <div class="form-group">
+            <label for="name">Library name</label>
+            <input type="text" id="name" name="name" value="{name_value}" placeholder="My University Library">
+        </div>
+        <div class="form-group">
+            <label for="key">Short key (a-z, 0-9)</label>
+            <input type="text" id="key" name="key" value="{key_value}" placeholder="mylib">
+        </div>
+
+        <div class="manual-toggle" style="display:{manual_toggle_display}">
+            <a href="#" onclick="document.querySelector('.manual-fields').style.display='block';this.parentElement.style.display='none';return false">Enter details manually instead</a>
+        </div>
+
+        <div class="manual-fields" style="display:{manual_display}">
+            <div class="form-group">
+                <label for="base_url">Base URL</label>
+                <input type="url" id="base_url" name="base_url" value="{base_url_value}" placeholder="https://library.primo.exlibrisgroup.com">
+            </div>
+            <div class="form-group">
+                <label for="vid">vid</label>
+                <input type="text" id="vid" name="vid" value="{vid_value}" placeholder="44EXAMPLE_INST:VU1">
+            </div>
+            <div class="form-group">
+                <label for="tab">tab</label>
+                <input type="text" id="tab" name="tab" value="{tab_value}" placeholder="LibraryCatalogue">
+            </div>
+            <div class="form-group">
+                <label for="scope">scope</label>
+                <input type="text" id="scope" name="scope" value="{scope_value}" placeholder="MyInst_and_CI">
+            </div>
+            <div class="form-group">
+                <label for="institution">institution</label>
+                <input type="text" id="institution" name="institution" value="{institution_value}" placeholder="44EXAMPLE_INST">
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <a href="/?select=1" class="btn">Cancel</a>
+            <button type="submit" class="btn btn-primary">Add Library</button>
+        </div>
+    </form>
+</div>
+"""
+
 
 class WebHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the web UI."""
@@ -1036,6 +1250,11 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def _send_redirect(self, location: str):
+        self.send_response(303)
+        self.send_header('Location', location)
+        self.end_headers()
     
     def _get_pool(self, lib_key: str) -> ResultPool | None:
         config = self.app_config.get_library(lib_key)
@@ -1061,17 +1280,57 @@ class WebHandler(BaseHTTPRequestHandler):
         all_libs = self.app_config.all_libraries()
         items = []
         for key, lib in all_libs.items():
-            source = "(saved)" if key in self.app_config.libraries else ""
+            is_saved = key in self.app_config.libraries
+            source = "(saved)" if is_saved else ""
+            delete_btn = ""
+            if is_saved:
+                delete_btn = (
+                    f'<form method="POST" action="/remove-library" style="display:inline">'
+                    f'<input type="hidden" name="key" value="{html.escape(key)}">'
+                    f'<button type="submit" class="lib-delete" title="Remove this library">&times;</button>'
+                    f'</form>'
+                )
             items.append(
-                f'<li><a href="/?lib={html.escape(key)}">'
+                f'<li>'
+                f'<a href="/?lib={html.escape(key)}">'
                 f'{html.escape(lib.name)}'
                 f'<span class="lib-key">{html.escape(key)} {source}</span>'
-                f'</a></li>'
+                f'</a>'
+                f'{delete_btn}'
+                f'</li>'
             )
-        
+        items.append(
+            f'<li><a href="/add-library" class="btn" style="text-align:center;margin-top:0.5rem">'
+            f'+ Add a library</a></li>'
+        )
+
         content = HTML_HEADER.format(library_info="") + HTML_LIBRARY_SELECT.format(items="\n".join(items))
         return self._render_page("Select Library", content)
-    
+
+    def _render_add_library(self, error: str = "", values: dict = None) -> str:
+        values = values or {}
+        message = ""
+        if error:
+            message = f'<div class="message message-error">{html.escape(error)}</div>'
+
+        has_manual = any(values.get(f) for f in ("base_url", "vid", "tab", "scope", "institution"))
+        header = HTML_HEADER.format(library_info='<div class="library-name"><a href="/?select=1">&larr; back to libraries</a></div>')
+        content = HTML_ADD_LIBRARY.format(
+            header=header,
+            message=message,
+            url_value=html.escape(values.get("url", "")),
+            base_url_value=html.escape(values.get("base_url", "")),
+            vid_value=html.escape(values.get("vid", "")),
+            tab_value=html.escape(values.get("tab", "")),
+            scope_value=html.escape(values.get("scope", "")),
+            institution_value=html.escape(values.get("institution", "")),
+            name_value=html.escape(values.get("name", "")),
+            key_value=html.escape(values.get("key", "")),
+            manual_display="block" if has_manual else "none",
+            manual_toggle_display="none" if has_manual else "block",
+        )
+        return self._render_page("Add Library", content)
+
     def _render_main(self, lib_key: str, results: list[dict] = None, material_type: str = None, n: int = 5) -> str:
         config = self.app_config.get_library(lib_key)
         if not config:
@@ -1151,7 +1410,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send_html(self._render_main(lib_key))
             else:
                 self._send_html(self._render_library_select())
-        
+
+        elif path == '/add-library':
+            self._send_html(self._render_add_library())
+
         elif path == '/random':
             if not lib_key:
                 self._send_html(self._render_library_select())
@@ -1214,6 +1476,98 @@ class WebHandler(BaseHTTPRequestHandler):
                 "word_supply": _word_supply.size(),
             })
         
+        else:
+            self.send_error(404, "Not Found")
+
+    def _parse_post_body(self) -> dict[str, str]:
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length).decode('utf-8')
+        parsed = urllib.parse.parse_qs(body, keep_blank_values=True)
+        return {k: v[0] for k, v in parsed.items()}
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == '/add-library':
+            fields = self._parse_post_body()
+            url = fields.get("url", "").strip()
+            config = None
+            error = None
+
+            if url:
+                # Try search URL first, then API URL
+                config, error = detect_from_url(url)
+                if not config:
+                    config, error2 = detect_from_api_url(url)
+                    if not config:
+                        error = f"Could not detect config from URL. As search URL: {error} — As API URL: {error2}"
+            else:
+                # Manual entry
+                base_url = fields.get("base_url", "").strip().rstrip("/")
+                vid = fields.get("vid", "").strip()
+                tab = fields.get("tab", "").strip()
+                scope = fields.get("scope", "").strip()
+                institution = fields.get("institution", "").strip()
+
+                if not all([base_url, vid, tab, scope, institution]):
+                    error = "All fields (base URL, vid, tab, scope, institution) are required for manual entry."
+                else:
+                    config = LibraryConfig(
+                        name="",
+                        base_url=base_url,
+                        vid=vid,
+                        tab=tab,
+                        scope=scope,
+                        institution=institution,
+                    )
+
+            if not config:
+                self._send_html(self._render_add_library(error=error, values=fields), 400)
+                return
+
+            # Apply custom name or generate one
+            custom_name = fields.get("name", "").strip()
+            if custom_name:
+                config.name = custom_name
+            elif not config.name:
+                domain_parts = urllib.parse.urlparse(config.base_url).netloc.replace(".primo.exlibrisgroup.com", "").split(".")
+                config.name = domain_parts[0].upper() + " Library"
+
+            # Validate key
+            key = fields.get("key", "").strip().lower()
+            key = re.sub(r'[^a-z0-9_]', '', key)
+            if not key:
+                key = re.sub(r'[^a-z0-9]', '', config.name.lower())[:12]
+            if not key:
+                self._send_html(self._render_add_library(error="Could not generate a valid key. Please provide one.", values=fields), 400)
+                return
+            if key in KNOWN_LIBRARIES:
+                self._send_html(self._render_add_library(error=f"'{key}' is a built-in library name. Choose a different key.", values=fields), 400)
+                return
+            if key in self.app_config.libraries:
+                self._send_html(self._render_add_library(error=f"'{key}' already exists. Choose a different key.", values=fields), 400)
+                return
+
+            # Test the configuration
+            success, message = test_config(config)
+            if not success:
+                self._send_html(self._render_add_library(error=f"Configuration test failed: {message}", values=fields), 400)
+                return
+
+            self.app_config.add_library(key, config)
+            self._send_redirect(f"/?lib={urllib.parse.quote(key)}")
+
+        elif path == '/remove-library':
+            fields = self._parse_post_body()
+            key = fields.get("key", "").strip()
+            if key and key not in KNOWN_LIBRARIES:
+                self.app_config.remove_library(key)
+                # Remove cached pool if present
+                with self.pools_lock:
+                    self.pools.pop(key, None)
+            self._send_redirect("/?select=1")
+
         else:
             self.send_error(404, "Not Found")
 
