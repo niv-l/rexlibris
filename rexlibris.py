@@ -1080,7 +1080,7 @@ class WebHandler(BaseHTTPRequestHandler):
         pool = self._get_pool(lib_key)
         
         # Header with library info
-        library_info = f'<div class="library-name">{html.escape(config.name)} · <a href="/">change</a></div>'
+        library_info = f'<div class="library-name">{html.escape(config.name)} · <a href="/?select=1">change</a></div>'
         header = HTML_HEADER.format(library_info=library_info)
         
         # Type options
@@ -1147,7 +1147,7 @@ class WebHandler(BaseHTTPRequestHandler):
         lib_key = params.get('lib', [self.app_config.active])[0]
         
         if path == '/':
-            if lib_key and self.app_config.get_library(lib_key):
+            if 'select' not in params and lib_key and self.app_config.get_library(lib_key):
                 self._send_html(self._render_main(lib_key))
             else:
                 self._send_html(self._render_library_select())
