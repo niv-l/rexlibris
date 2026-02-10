@@ -437,6 +437,22 @@ def detect_from_api_url(api_url: str) -> tuple[LibraryConfig | None, str | None]
 
 # ── Record helpers ──────────────────────────────────────────────────
 
+def _clean_pnx(value: str) -> str:
+    """Strip Primo PNX $$X subfield delimiters from display values.
+
+    Primo encodes subfields as $$Q, $$D, $$0 etc.  For display we only
+    want the human-readable part.  If the text *starts* with a $$ code
+    (e.g. ``$$aName$$bRole``) we grab the first subfield value instead.
+    """
+    if '$$' not in value:
+        return value
+    parts = re.split(r'\$\$\w', value)
+    for part in parts:
+        part = part.strip()
+        if part:
+            return part
+    return value
+
 def _record_id(doc: dict) -> str | None:
     ids = doc.get("pnx", {}).get("control", {}).get("recordid", [])
     return ids[0] if ids else None
@@ -456,12 +472,13 @@ def record_url(doc: dict, config: LibraryConfig) -> str | None:
     }
     return f"{config.base_url}/discovery/fulldisplay?{urllib.parse.urlencode(params)}"
 
-
 def format_record(doc: dict, *, verbose: bool = False) -> list[str]:
     disp = doc.get("pnx", {}).get("display", {})
 
-    title = (disp.get("title", ["Unknown"])[0])[:120]
-    creator = (disp.get("creator", disp.get("contributor", ["Unknown"])) or ["Unknown"])[0]
+    title = _clean_pnx(disp.get("title", ["Unknown"])[0])[:120]
+    creator = _clean_pnx(
+        (disp.get("creator", disp.get("contributor", ["Unknown"])) or ["Unknown"])[0]
+    ).replace(' ; ', '; ')
     rtype = disp.get("type", ["?"])[0]
     date = disp.get("creationdate", ["n.d."])[0]
 
@@ -474,12 +491,13 @@ def format_record(doc: dict, *, verbose: bool = False) -> list[str]:
         for key, label in [("publisher", "Publisher"), ("language", "Language")]:
             val = disp.get(key, [None])[0]
             if val:
-                lines.append(f"     {label}: {val[:80]}")
+                lines.append(f"     {label}: {_clean_pnx(val)[:80]}")
         subjects = disp.get("subject", [])
         if subjects:
-            lines.append(f"     Subjects: {'; '.join(subjects[:5])}")
+            lines.append(f"     Subjects: {'; '.join(_clean_pnx(s) for s in subjects[:5])}")
         desc = disp.get("description", [None])[0]
         if desc:
+            desc = _clean_pnx(desc)
             lines.append(f"     {desc[:200]}{'…' if len(desc) > 200 else ''}")
     return lines
 
@@ -487,10 +505,10 @@ def format_record(doc: dict, *, verbose: bool = False) -> list[str]:
 def extract_record_data(doc: dict, config: LibraryConfig) -> dict:
     """Extract record data for web display."""
     disp = doc.get("pnx", {}).get("display", {})
-    
-    title = (disp.get("title", ["Unknown"])[0])[:200]
+
+    title = _clean_pnx(disp.get("title", ["Unknown"])[0])[:200]
     creators = disp.get("creator", disp.get("contributor", [])) or []
-    creator = creators[0] if creators else "Unknown"
+    creator = _clean_pnx(creators[0]).replace(' ; ', '; ') if creators else "Unknown"
     rtype = disp.get("type", ["unknown"])[0]
     date = disp.get("creationdate", ["n.d."])[0]
     publisher = disp.get("publisher", [None])[0]
@@ -498,28 +516,27 @@ def extract_record_data(doc: dict, config: LibraryConfig) -> dict:
     subjects = disp.get("subject", [])[:8]
     description = disp.get("description", [None])[0]
     identifier = disp.get("identifier", [])
-    
+
     isbn = None
     for ident in identifier:
         if ident and ('isbn' in ident.lower() or re.match(r'^\d{10,13}$', ident.replace('-', ''))):
             isbn = ident
             break
-    
+
     return {
         "title": title,
         "creator": creator,
-        "creators": creators[:5],
+        "creators": [_clean_pnx(c).replace(' ; ', '; ') for c in creators[:5]],
         "type": rtype,
         "date": date,
-        "publisher": publisher,
-        "language": language,
-        "subjects": subjects,
-        "description": description[:500] if description else None,
+        "publisher": _clean_pnx(publisher) if publisher else None,
+        "language": _clean_pnx(language) if language else None,
+        "subjects": [_clean_pnx(s) for s in subjects],
+        "description": _clean_pnx(description)[:500] if description else None,
         "isbn": isbn,
         "url": record_url(doc, config),
         "record_id": _record_id(doc),
     }
-
 
 # ── Result pool (background pre-fetch) ─────────────────────────────
 
